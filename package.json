@@ -1,0 +1,12 @@
+{
+  "name": "deriv-ai-scanner-backend",
+  "version": "1.0.0",
+  "description": "Deriv AI Market Scanner backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
