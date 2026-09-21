@@ -4,8 +4,7 @@ const WebSocket = require("ws");
 const PORT = Number(process.env.PORT) || 10000;
 
 const DERIV_URL =
-  "wss://ws.derivws.com/websockets/v3";
-
+  "wss://api.derivws.com/trading/v1/options/ws/public";
 const MARKETS = [
   "1HZ10V",
   "1HZ25V",
