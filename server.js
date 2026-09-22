@@ -5,6 +5,7 @@ const PORT = Number(process.env.PORT) || 10000;
 
 const DERIV_URL =
   "wss://api.derivws.com/trading/v1/options/ws/public";
+
 const MARKETS = [
   "1HZ10V",
   "1HZ25V",
@@ -27,10 +28,8 @@ let deriv = null;
 let derivConnected = false;
 let reconnectTimer = null;
 
-
-/* -----------------------------
-   HEALTH / HTTP SERVER
------------------------------ */
+let historyQueue = [];
+let pendingHistorySymbol = null;
 
 const httpServer = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -41,14 +40,12 @@ const httpServer = http.createServer((req, res) => {
       "Content-Type": "application/json"
     });
 
-    res.end(
-      JSON.stringify({
-        status: "online",
-        derivConnected,
-        markets: Object.keys(marketData).length,
-        time: new Date().toISOString()
-      })
-    );
+    res.end(JSON.stringify({
+      status: "online",
+      derivConnected,
+      markets: Object.keys(marketData).length,
+      time: new Date().toISOString()
+    }));
 
     return;
   }
@@ -57,21 +54,16 @@ const httpServer = http.createServer((req, res) => {
     "Content-Type": "text/plain"
   });
 
-  res.end("Deriv AI Market Scanner backend is running.");
+  res.end(
+    "Deriv AI Market Scanner backend is running."
+  );
 });
-
-
-/* -----------------------------
-   DASHBOARD WEBSOCKET SERVER
------------------------------ */
 
 const dashboard = new WebSocket.Server({
   server: httpServer
 });
 
-
 dashboard.on("connection", socket => {
-
   clients.add(socket);
 
   console.log("Dashboard connected");
@@ -85,95 +77,69 @@ dashboard.on("connection", socket => {
 
   socket.on("close", () => {
     clients.delete(socket);
-    console.log("Dashboard disconnected");
   });
 
   socket.on("error", () => {
     clients.delete(socket);
   });
-
 });
 
-
 function sendToClient(socket, data) {
-
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(data));
   }
-
 }
 
-
 function broadcast(data) {
-
   const message = JSON.stringify(data);
 
   for (const socket of clients) {
-
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(message);
     }
-
   }
-
 }
 
-
 function sendCurrentState(socket) {
-
   for (const symbol of Object.keys(marketData)) {
-
     sendToClient(socket, {
       type: "market",
       data: marketData[symbol]
     });
-
   }
-
 }
 
-
-/* -----------------------------
-   DIGIT EXTRACTION
------------------------------ */
-
 function getLastDigit(value) {
-
   const text = String(value);
 
   if (text.includes(".")) {
-
     const decimalPart = text.split(".")[1];
 
     if (decimalPart && decimalPart.length > 0) {
       return Number(decimalPart.slice(-1));
     }
-
   }
 
   return Number(text.slice(-1));
-
 }
 
-
-/* -----------------------------
-   MARKET ANALYSIS
------------------------------ */
-
 function analyse(symbol, digits) {
-
   if (!Array.isArray(digits) || digits.length < 30) {
     return null;
   }
 
   const cleanDigits = digits
     .map(Number)
-    .filter(d => Number.isInteger(d) && d >= 0 && d <= 9);
+    .filter(
+      d =>
+        Number.isInteger(d) &&
+        d >= 0 &&
+        d <= 9
+    );
 
   if (cleanDigits.length < 30) {
     return null;
   }
-
 
   const total = cleanDigits.length;
 
@@ -183,108 +149,66 @@ function analyse(symbol, digits) {
     counts[digit]++;
   }
 
-
-  /*
-    Find the most frequent digit.
-  */
-
   let bestDigit = 0;
 
   for (let i = 1; i < 10; i++) {
-
     if (counts[i] > counts[bestDigit]) {
       bestDigit = i;
     }
-
   }
-
 
   const overallFrequency =
     (counts[bestDigit] / total) * 100;
 
-
-  /*
-    Recent 50 ticks.
-  */
-
   const recent =
     cleanDigits.slice(-50);
 
-
   const recentCount =
-    recent.filter(d => d === bestDigit).length;
-
+    recent.filter(
+      d => d === bestDigit
+    ).length;
 
   const recentFrequency =
     (recentCount / recent.length) * 100;
 
-
-  /*
-    Previous 50 ticks.
-  */
-
   const previous =
     cleanDigits.slice(-100, -50);
-
 
   let previousFrequency = 0;
 
   if (previous.length > 0) {
-
     const previousCount =
-      previous.filter(d => d === bestDigit).length;
+      previous.filter(
+        d => d === bestDigit
+      ).length;
 
     previousFrequency =
       (previousCount / previous.length) * 100;
-
   }
-
-
-  /*
-    Momentum.
-  */
 
   const momentum =
     recentFrequency - previousFrequency;
-
-
-  /*
-    Statistical model score.
-
-    This is a MODEL STRENGTH score.
-    It is NOT a guaranteed probability of winning.
-  */
 
   let strength =
     (overallFrequency * 0.50) +
     (recentFrequency * 0.35) +
     (Math.max(momentum, 0) * 0.15);
 
-
   strength =
-    Math.max(0, Math.min(100, strength));
-
-
-  /*
-    Even / Odd.
-  */
+    Math.max(
+      0,
+      Math.min(100, strength)
+    );
 
   const evenCount =
-    cleanDigits.filter(d => d % 2 === 0).length;
+    cleanDigits.filter(
+      d => d % 2 === 0
+    ).length;
 
   const oddCount =
     total - evenCount;
 
-
-  const even =
-    (evenCount / total) * 100;
-
-  const odd =
-    (oddCount / total) * 100;
-
-
   return {
-
     symbol,
 
     matchDigit: bestDigit,
@@ -298,10 +222,16 @@ function analyse(symbol, digits) {
         : "NO_MATCH",
 
     even:
-      Number(even.toFixed(1)),
+      Number(
+        ((evenCount / total) * 100)
+          .toFixed(1)
+      ),
 
     odd:
-      Number(odd.toFixed(1)),
+      Number(
+        ((oddCount / total) * 100)
+          .toFixed(1)
+      ),
 
     ticks: total,
 
@@ -310,18 +240,10 @@ function analyse(symbol, digits) {
 
     timestamp:
       Date.now()
-
   };
-
 }
 
-
-/* -----------------------------
-   UPDATE ANALYSIS
------------------------------ */
-
 function updateMarket(symbol) {
-
   const market =
     marketData[symbol];
 
@@ -330,7 +252,10 @@ function updateMarket(symbol) {
   }
 
   const result =
-    analyse(symbol, market.digits);
+    analyse(
+      symbol,
+      market.digits
+    );
 
   if (!result) {
     return;
@@ -341,142 +266,162 @@ function updateMarket(symbol) {
     ...result
   };
 
-
   broadcast({
     type: "market",
     data: marketData[symbol]
   });
-
 }
 
+function requestNextHistory() {
+  if (
+    !deriv ||
+    deriv.readyState !== WebSocket.OPEN
+  ) {
+    return;
+  }
 
-/* -----------------------------
-   CONNECT TO DERIV
------------------------------ */
+  if (pendingHistorySymbol) {
+    return;
+  }
+
+  const symbol =
+    historyQueue.shift();
+
+  if (!symbol) {
+    return;
+  }
+
+  pendingHistorySymbol =
+    symbol;
+
+  console.log(
+    `Requesting history for ${symbol}`
+  );
+
+  deriv.send(
+    JSON.stringify({
+      ticks_history: symbol,
+      count: HISTORY_COUNT,
+      end: "latest",
+      style: "ticks",
+      subscribe: 0
+    })
+  );
+}
 
 function connectDeriv() {
-
   if (deriv) {
-
     try {
       deriv.close();
     } catch (_) {}
-
   }
 
+  console.log(
+    "Connecting to Deriv..."
+  );
 
-  console.log("Connecting to Deriv...");
+  console.log(
+    `Endpoint: ${DERIV_URL}`
+  );
+
+  historyQueue =
+    [...MARKETS];
+
+  pendingHistorySymbol =
+    null;
 
   deriv =
-    new WebSocket(DERIV_URL);
-
+    new WebSocket(
+      DERIV_URL,
+      {
+        handshakeTimeout: 15000
+      }
+    );
 
   deriv.on("open", () => {
-
     derivConnected = true;
 
-    console.log("Connected to Deriv");
+    console.log(
+      "Connected to Deriv"
+    );
 
     broadcast({
       type: "connection",
       connected: true
     });
 
-
-    /*
-      Request available symbols.
-    */
-
     deriv.send(
       JSON.stringify({
         active_symbols: "brief",
-        product_type: "basic",
-        req_id: 1
+        product_type: "basic"
       })
     );
 
-
-    /*
-      Request history and live ticks
-      for every selected market.
-    */
-
-    MARKETS.forEach((symbol, index) => {
-
-      deriv.send(
-        JSON.stringify({
-          ticks_history: symbol,
-          count: HISTORY_COUNT,
-          end: "latest",
-          style: "ticks",
-          req_id: 100 + index
-        })
-      );
-
-
+    for (const symbol of MARKETS) {
       deriv.send(
         JSON.stringify({
           ticks: symbol,
-          subscribe: 1,
-          req_id: 200 + index
+          subscribe: 1
         })
       );
+    }
 
-    });
-
+    requestNextHistory();
   });
 
-
   deriv.on("message", raw => {
-
     try {
-
       const data =
-        JSON.parse(raw.toString());
-
+        JSON.parse(
+          raw.toString()
+        );
 
       if (data.error) {
-
         console.log(
           "Deriv error:",
-          data.error.message || data.error
+          data.error.message ||
+          data.error
         );
 
         broadcast({
           type: "error",
           message:
-            data.error.message || "Deriv error"
+            data.error.message ||
+            "Deriv error"
         });
+
+        if (
+          pendingHistorySymbol
+        ) {
+          pendingHistorySymbol =
+            null;
+
+          requestNextHistory();
+        }
 
         return;
       }
 
-
-      /*
-        Historical ticks.
-      */
-
       if (
         data.msg_type === "history" &&
         data.history &&
-        data.echo_req
+        Array.isArray(
+          data.history.prices
+        )
       ) {
-
         const symbol =
-          data.echo_req.ticks_history;
-
+          pendingHistorySymbol;
 
         if (!symbol) {
+          console.log(
+            "Received history without a pending symbol"
+          );
+
           return;
         }
 
-
-        const prices =
-          data.history.prices || [];
-
-
         const digits =
-          prices
+          data.history.prices
             .map(getLastDigit)
             .filter(
               d =>
@@ -485,189 +430,144 @@ function connectDeriv() {
                 d <= 9
             );
 
-
         marketData[symbol] = {
-
           symbol,
-
           digits,
-
           ticks: digits.length,
-
           timestamp: Date.now()
-
         };
 
+        pendingHistorySymbol =
+          null;
 
         updateMarket(symbol);
 
+        requestNextHistory();
+
+        return;
       }
-
-
-      /*
-        Live tick.
-      */
 
       if (
         data.msg_type === "tick" &&
         data.tick
       ) {
-
         const symbol =
           data.tick.symbol;
-
 
         if (!symbol) {
           return;
         }
 
-
         const digit =
-          getLastDigit(data.tick.quote);
+          getLastDigit(
+            data.tick.quote
+          );
 
-
-        if (!Number.isInteger(digit)) {
+        if (
+          !Number.isInteger(digit) ||
+          digit < 0 ||
+          digit > 9
+        ) {
           return;
         }
 
-
         if (!marketData[symbol]) {
-
           marketData[symbol] = {
             symbol,
             digits: []
           };
-
         }
 
-
-        marketData[symbol].digits.push(digit);
-
-
-        /*
-          Keep the most recent 500 ticks.
-        */
+        marketData[symbol]
+          .digits
+          .push(digit);
 
         if (
-          marketData[symbol].digits.length > 500
+          marketData[symbol]
+            .digits.length > 500
         ) {
-
-          marketData[symbol].digits =
+          marketData[symbol]
+            .digits =
             marketData[symbol]
               .digits
               .slice(-500);
-
         }
 
-
-        marketData[symbol].ticks =
-          marketData[symbol].digits.length;
-
+        marketData[symbol]
+          .ticks =
+          marketData[symbol]
+            .digits.length;
 
         updateMarket(symbol);
-
       }
 
-    }
-
-    catch (error) {
-
+    } catch (error) {
       console.log(
         "Message error:",
         error.message
       );
-
     }
-
   });
 
-
   deriv.on("error", error => {
-
     console.log(
       "Deriv connection error:",
       error.message
     );
-
   });
 
-
-  deriv.on("close", () => {
-
+  deriv.on("close", (code, reason) => {
     derivConnected = false;
 
     console.log(
-      "Deriv connection closed"
+      `Deriv connection closed. code=${code} reason=${reason || ""}`
     );
-
 
     broadcast({
       type: "connection",
       connected: false
     });
 
+    pendingHistorySymbol =
+      null;
 
     if (!reconnectTimer) {
-
       reconnectTimer =
         setTimeout(() => {
-
           reconnectTimer = null;
-
           connectDeriv();
-
         }, 5000);
-
     }
-
   });
-
 }
 
-
-/* -----------------------------
-   AUTOMATIC 60 SECOND RESCAN
------------------------------ */
-
 setInterval(() => {
-
   console.log(
     "Running 60-second analysis refresh..."
   );
 
-
   for (
-    const symbol of Object.keys(marketData)
+    const symbol of
+    Object.keys(marketData)
   ) {
-
     updateMarket(symbol);
-
   }
-
 
   broadcast({
     type: "scan",
     timestamp: Date.now()
   });
 
-
 }, RESCAN_MS);
-
-
-/* -----------------------------
-   START SERVER
------------------------------ */
 
 httpServer.listen(
   PORT,
   "0.0.0.0",
   () => {
-
     console.log(
       `Backend listening on 0.0.0.0:${PORT}`
     );
 
     connectDeriv();
-
   }
 );
