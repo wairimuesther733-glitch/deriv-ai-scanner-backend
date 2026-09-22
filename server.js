@@ -351,11 +351,10 @@ function connectDeriv() {
     });
 
     deriv.send(
-      JSON.stringify({
-        active_symbols: "brief",
-        product_type: "basic"
-      })
-    );
+  JSON.stringify({
+    active_symbols: "brief"
+  })
+);
 
     for (const symbol of MARKETS) {
       deriv.send(
